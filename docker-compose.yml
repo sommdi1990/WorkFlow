@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # CockroachDB Database
+  cockroachdb:
+    image: cockroachdb/cockroach:v23.1.0
+    container_name: workflow-cockroachdb
+    command: start-single-node --insecure --http-addr=0.0.0.0:8080
+    ports:
+      - "26257:26257"  # SQL port
+      - "8080:8080"    # Admin UI port
+    volumes:
+      - cockroachdb-data:/cockroach/cockroach-data
+    environment:
+      - COCKROACH_DATABASE=workflow_db
+    networks:
+      - workflow-network
+    healthcheck:
+      test: ["CMD", "cockroach", "sql", "--insecure", "--execute", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Spring Boot Backend
+  workflow-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: workflow-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://cockroachdb:26257/workflow_db?sslmode=disable
+      - SPRING_DATASOURCE_USERNAME=root
+      - SPRING_DATASOURCE_PASSWORD=
+      - SPRING_PROFILES_ACTIVE=docker
+    depends_on:
+      cockroachdb:
+        condition: service_healthy
+    networks:
+      - workflow-network
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # React Frontend
+  workflow-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: workflow-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8080/api
+    depends_on:
+      - workflow-backend
+    networks:
+      - workflow-network
+    restart: unless-stopped
+
+volumes:
+  cockroachdb-data:
+    driver: local
+
+networks:
+  workflow-network:
+    driver: bridge
